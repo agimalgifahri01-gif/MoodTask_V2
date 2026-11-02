@@ -9,6 +9,7 @@ export interface ReminderRepository {
     enabled: boolean,
   ): Promise<TaskReminder>
   removeReminder(id: string): Promise<void>
+  getPushSubscriptionOrigin(endpoint: string): Promise<string | null>
   savePushSubscription(subscription: PushSubscriptionData): Promise<void>
   removePushSubscription(endpoint: string): Promise<void>
   getNotificationSoundPreference(): Promise<NotificationSoundPreference | null>

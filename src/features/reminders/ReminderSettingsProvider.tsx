@@ -17,6 +17,7 @@ import type { PushSubscriptionData, TaskReminder } from './model'
 import { validateReminderOffset } from './model'
 import type { Task } from '../tasks/domain'
 import { ReminderSettingsContext } from './ReminderSettingsContext'
+import { isCanonicalPushOrigin } from './pushOrigins'
 import {
   DEFAULT_NOTIFICATION_SOUND,
   playNotificationSound,
@@ -153,7 +154,37 @@ export function ReminderSettingsProvider({
     }
     void getCurrentBrowserPushSubscription()
       .then((subscription) => {
-        if (active) setPushSubscribed(subscription !== null)
+        if (!active) return
+        setPushSubscribed(subscription !== null)
+        if (
+          subscription &&
+          repository &&
+          isCanonicalPushOrigin(window.location.origin)
+        ) {
+          const serialized = subscription.toJSON()
+          const p256dh = serialized.keys?.p256dh
+          const auth = serialized.keys?.auth
+          if (subscription.endpoint && p256dh && auth) {
+            void repository
+              .getPushSubscriptionOrigin(subscription.endpoint)
+              .then((origin) => {
+                if (origin === window.location.origin) return
+                return repository.savePushSubscription({
+                  endpoint: subscription.endpoint,
+                  origin: window.location.origin,
+                  expirationTime: subscription.expirationTime,
+                  keys: { p256dh, auth },
+                })
+              })
+              .catch(() => {
+                if (active) {
+                  setError(
+                    'Langganan browser belum tersinkron ke akun. Periksa koneksi sebelum mengandalkan pengingat push.',
+                  )
+                }
+              })
+          }
+        }
       })
       .catch(() => {
         if (active) setPushSubscribed(false)
@@ -428,6 +459,7 @@ export function ReminderSettingsProvider({
       }
       const data: PushSubscriptionData = {
         endpoint: subscription.endpoint,
+        origin: window.location.origin,
         expirationTime: subscription.expirationTime,
         keys: { p256dh, auth },
       }

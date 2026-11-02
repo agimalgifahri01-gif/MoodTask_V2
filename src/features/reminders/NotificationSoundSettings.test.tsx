@@ -38,6 +38,7 @@ function makeRepository(
       throw new Error('Not used in sound settings tests')
     },
     removeReminder: async () => {},
+    getPushSubscriptionOrigin: async () => null,
     savePushSubscription: async () => {},
     removePushSubscription: async () => {},
     getNotificationSoundPreference: async () => initial,

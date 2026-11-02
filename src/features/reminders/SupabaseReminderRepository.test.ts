@@ -4,12 +4,14 @@ import { SupabaseReminderRepository } from './SupabaseReminderRepository'
 
 function fakeClient() {
   let upserted: unknown
+  let upsertOptions: unknown
   let failure: { code: string; message: string } | null = null
   const filters: Array<[string, unknown]> = []
   const row = {
     id: 'reminder-1',
     task_id: 'task-1',
     user_id: 'user-a',
+    origin: 'https://mood-task-v2.vercel.app',
     minutes_before: 60,
     enabled: true,
     created_at: '2026-11-01T00:00:00+00:00',
@@ -25,8 +27,9 @@ function fakeClient() {
       return chain
     }),
     order: vi.fn(async () => ({ data: [row], error: failure })),
-    upsert: vi.fn((value: unknown) => {
+    upsert: vi.fn((value: unknown, options?: unknown) => {
       upserted = value
+      upsertOptions = options
       return chain
     }),
     delete: vi.fn(() => chain),
@@ -64,6 +67,7 @@ function fakeClient() {
     filters,
     row,
     upserted: () => upserted,
+    upsertOptions: () => upsertOptions,
     failWith: (error: { code: string; message: string }) => {
       failure = error
     },
@@ -162,13 +166,16 @@ describe('SupabaseReminderRepository', () => {
     const repository = new SupabaseReminderRepository(fake.client, 'user-a')
     await repository.savePushSubscription({
       endpoint: 'https://fcm.googleapis.com/fcm/send/sub-1',
+      origin: 'https://mood-task-v2.vercel.app',
       expirationTime: null,
       keys: { p256dh: 'p256', auth: 'auth' },
     })
     expect(fake.upserted()).toMatchObject({
       user_id: 'user-a',
       endpoint: 'https://fcm.googleapis.com/fcm/send/sub-1',
+      origin: 'https://mood-task-v2.vercel.app',
     })
+    expect(fake.upsertOptions()).toEqual({ onConflict: 'endpoint' })
 
     await repository.removePushSubscription(
       'https://fcm.googleapis.com/fcm/send/sub-1',
@@ -179,6 +186,36 @@ describe('SupabaseReminderRepository', () => {
     ])
     expect(fake.filters).toContainEqual(['user_id', 'user-a'])
     expect(fake.chain.select).not.toHaveBeenCalled()
+  })
+
+  it('looks up a subscription origin only for the current endpoint and owner', async () => {
+    const fake = fakeClient()
+    const repository = new SupabaseReminderRepository(fake.client, 'user-a')
+
+    await expect(
+      repository.getPushSubscriptionOrigin(
+        'https://fcm.googleapis.com/fcm/send/sub-1',
+      ),
+    ).resolves.toBe('https://mood-task-v2.vercel.app')
+    expect(fake.filters).toContainEqual([
+      'endpoint',
+      'https://fcm.googleapis.com/fcm/send/sub-1',
+    ])
+    expect(fake.filters).toContainEqual(['user_id', 'user-a'])
+  })
+
+  it('rejects storing a push subscription from a non-canonical origin', async () => {
+    const fake = fakeClient()
+    const repository = new SupabaseReminderRepository(fake.client, 'user-a')
+    await expect(
+      repository.savePushSubscription({
+        endpoint: 'https://fcm.googleapis.com/fcm/send/preview',
+        origin: 'https://mood-task-v2-preview.vercel.app',
+        expirationTime: null,
+        keys: { p256dh: 'p256', auth: 'auth' },
+      }),
+    ).rejects.toThrow('Push hanya dapat disimpan untuk domain produksi')
+    expect(fake.chain.upsert).not.toHaveBeenCalled()
   })
 
   it('reports subscription cleanup failures without removing other account rows', async () => {

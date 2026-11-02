@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ReminderRepository } from './ReminderRepository'
 import type { PushSubscriptionData, TaskReminder } from './model'
+import { CANONICAL_PUSH_ORIGIN } from './pushOrigins'
 import {
   MAX_NOTIFICATION_SOUND_BYTES,
   NOTIFICATION_SOUND_BUCKET,
@@ -126,10 +127,16 @@ export class SupabaseReminderRepository implements ReminderRepository {
   async savePushSubscription(
     subscription: PushSubscriptionData,
   ): Promise<void> {
+    if (subscription.origin !== CANONICAL_PUSH_ORIGIN) {
+      throw new Error(
+        'Push hanya dapat disimpan untuk domain produksi MoodTask.',
+      )
+    }
     const { error } = await this.client.from('push_subscriptions').upsert(
       {
         user_id: this.userId,
         endpoint: subscription.endpoint,
+        origin: subscription.origin,
         p256dh: subscription.keys.p256dh,
         auth: subscription.keys.auth,
         expires_at: subscription.expirationTime
@@ -139,6 +146,21 @@ export class SupabaseReminderRepository implements ReminderRepository {
       { onConflict: 'endpoint' },
     )
     if (error) throwReminderError(error)
+  }
+
+  async getPushSubscriptionOrigin(endpoint: string): Promise<string | null> {
+    const { data, error } = await this.client
+      .from('push_subscriptions')
+      .select('origin')
+      .eq('endpoint', endpoint)
+      .eq('user_id', this.userId)
+      .maybeSingle()
+    if (error) {
+      throw new Error(
+        'Asal langganan notifikasi belum dapat diverifikasi. Periksa koneksi lalu coba lagi.',
+      )
+    }
+    return typeof data?.origin === 'string' ? data.origin : null
   }
 
   async removePushSubscription(endpoint: string): Promise<void> {

@@ -21,6 +21,7 @@ function makeRepository(muted = false): ReminderRepository {
       throw new Error('Not used in sound setting tests')
     },
     removeReminder: async () => {},
+    getPushSubscriptionOrigin: async () => null,
     savePushSubscription: async () => {},
     removePushSubscription: async () => {},
     getNotificationSoundPreference: async () => ({

@@ -105,6 +105,7 @@ describe('DashboardPage', () => {
       list: async () => [],
       saveReminder,
       removeReminder: async () => {},
+      getPushSubscriptionOrigin: async () => null,
       savePushSubscription: async () => {},
       removePushSubscription: async () => {},
       getNotificationSoundPreference: async () => null,

@@ -14,6 +14,7 @@ const reminderRepository: ReminderRepository = {
     createdAt: new Date().toISOString(),
   }),
   removeReminder: async () => {},
+  getPushSubscriptionOrigin: async () => null,
   savePushSubscription: async () => {},
   removePushSubscription: async () => {},
   getNotificationSoundPreference: async () => null,
