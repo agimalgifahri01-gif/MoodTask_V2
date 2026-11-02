@@ -1,0 +1,5 @@
+project_id = "moodtask"
+
+[functions.send-due-reminders]
+# The function validates a separate high-entropy scheduler header itself.
+verify_jwt = false

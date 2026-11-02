@@ -1,0 +1,18 @@
+{
+  "name": "MoodTask",
+  "short_name": "MoodTask",
+  "description": "Pengingat tugas yang ditemani Momo.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8f7f3",
+  "theme_color": "#789788",
+  "icons": [
+    {
+      "src": "/momo/calm.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

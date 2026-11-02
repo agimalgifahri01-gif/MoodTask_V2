@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 220" role="img" aria-label="Momo santai">
+  <ellipse cx="100" cy="204" rx="58" ry="8" fill="#d8d4c9" opacity=".45"/>
+  <path d="M47 137c0-34 23-59 53-59s53 25 53 59v35c0 16-12 27-28 27H75c-16 0-28-11-28-27z" fill="#f3b36f"/>
+  <path d="M54 128c5-31 24-51 46-51s41 20 46 51c-14-11-29-15-46-15s-32 4-46 15" fill="#e99b52"/>
+  <ellipse cx="100" cy="108" rx="52" ry="44" fill="#ffd29c"/>
+  <path d="M76 91q4 5 8 0M116 91q4 5 8 0M91 102q9 10 18 0" fill="none" stroke="#503a31" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="67" cy="111" rx="7" ry="4" fill="#ef9b85" opacity=".55"/>
+  <ellipse cx="133" cy="111" rx="7" ry="4" fill="#ef9b85" opacity=".55"/>
+  <path d="M58 159c10-10 21-15 34-15h16c13 0 24 5 34 15v31c0 5-4 9-9 9H67c-5 0-9-4-9-9z" fill="#aac8bc"/>
+  <path d="M58 159q42 18 84 0" fill="none" stroke="#92b5a6" stroke-width="3"/>
+  <circle cx="52" cy="77" r="8" fill="#f4bd7e"/><circle cx="148" cy="77" r="8" fill="#f4bd7e"/>
+</svg>
