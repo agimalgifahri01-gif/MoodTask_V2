@@ -13,7 +13,11 @@ import {
 
 const { validateFile, playSound } = vi.hoisted(() => ({
   validateFile: vi.fn(),
-  playSound: vi.fn(async () => ({ stop: vi.fn(), onEnded: vi.fn() })),
+  playSound: vi.fn(async () => ({
+    stop: vi.fn(),
+    onEnded: vi.fn(),
+    onStatus: vi.fn(),
+  })),
 }))
 
 vi.mock('./notificationSound', async (importOriginal) => {

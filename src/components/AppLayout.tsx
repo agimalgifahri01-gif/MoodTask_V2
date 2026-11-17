@@ -68,7 +68,6 @@ export default function AppLayout() {
             >
               <Icon size={19} strokeWidth={1.8} aria-hidden="true" />
               <span>{label}</span>
-              {label === 'Pengingat' && <span className="nav-soon">nanti</span>}
             </NavLink>
           ))}
         </nav>

@@ -1,5 +1,6 @@
 import PageIntro from '../components/PageIntro'
 import NotificationSoundSettings from '../features/reminders/NotificationSoundSettings'
+import NativeSoundDiagnosticsPanel from '../features/reminders/NativeSoundDiagnosticsPanel'
 import { useReminderSettings } from '../features/reminders/ReminderSettingsContext'
 
 export default function SettingsPage() {
@@ -18,6 +19,11 @@ export default function SettingsPage() {
       ) : (
         <NotificationSoundSettings settings={settings} />
       )}
+      <NativeSoundDiagnosticsPanel
+        diagnostics={settings.nativeSoundDiagnostics}
+        soundId={settings.soundPreference.soundId}
+        onClear={settings.clearNativeSoundDiagnostics}
+      />
     </>
   )
 }
