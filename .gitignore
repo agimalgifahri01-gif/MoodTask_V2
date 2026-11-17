@@ -8,3 +8,5 @@ coverage/
 .DS_Store
 *.tsbuildinfo
 supabase/.temp/
+/src-tauri/target/
+/src-tauri/gen/schemas/

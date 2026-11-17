@@ -7,6 +7,44 @@
   box-shadow: var(--shadow);
 }
 
+.native-sound-diagnostics {
+  margin-top: 16px;
+}
+
+.native-sound-diagnostics-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.native-sound-diagnostics-list > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 16px;
+  border-bottom: 1px solid #eeeee7;
+  padding-bottom: 8px;
+}
+
+.native-sound-diagnostics-list dt {
+  color: #66695f;
+  font-size: 13px;
+}
+
+.native-sound-diagnostics-list dd {
+  margin: 0;
+  color: #454a41;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.native-sound-diagnostics-error {
+  margin: 0;
+  color: #a43c32;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .sound-settings-panel {
   display: grid;
   gap: 18px;

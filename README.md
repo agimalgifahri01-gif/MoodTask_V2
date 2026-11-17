@@ -217,3 +217,37 @@ The migration `supabase/migrations/20261102000000_notification_sounds.sql` creat
    ```
 7. Your operating system's notification center will show the incoming push notification with Momo's corresponding mood and icon.
 8. Click the notification: the browser will reopen directly to `/tasks` and open that task's detail dialog.
+
+## Windows desktop development
+
+MoodTask Desktop wraps the existing React and Vite frontend with Tauri 2. The web app remains available through the normal Vite commands.
+
+Prerequisites on Windows:
+
+- Node.js 20.19+ (or 22.12+) and npm.
+- Rust with the MSVC toolchain.
+- Microsoft C++ Build Tools with **Desktop development with C++**.
+- Microsoft Edge WebView2 Runtime.
+
+Install project dependencies once with the command below, then run the desktop development app.
+
+    npm ci
+    npm run tauri -- dev
+
+Build the Windows desktop application and NSIS installer with:
+
+    npm run tauri -- build
+
+The Tauri build runs `npm run build` first and loads the Vite output from `dist/`. The generated installer is placed under `src-tauri/target/release/bundle/nsis/`. Closing the main window hides MoodTask in the Windows system tray. Use the tray menu to reopen the existing window or exit the application.
+
+### Native Windows reminders
+
+The desktop process mirrors only the signed-in account's active tasks and enabled reminder offsets to the Rust reminder engine after the React event listener is active and the current snapshot is loaded. Rust validates the snapshot, then stores the minimum fields needed (account ID, task ID/title, UTC epoch deadlines, reminder IDs/offsets, and processed/pending event IDs) in Tauri's application data directory as `native-reminders-v1.json`. It does not store Supabase passwords, access tokens, or keys. Task titles are stored as local reminder data in the current Windows user profile.
+
+One native scheduler thread checks every 10 seconds. Its reminder identity combines account, task, reminder, and current deadline, so changing a deadline creates a new schedule. Newly detected reminders are persisted as pending, then emitted until React acknowledges them; the Windows toast is requested once when a reminder first enters the pending queue. Pending delivery survives an app restart, and completed/deleted tasks or changed deadlines remove stale pending entries. If Windows wakes after several offsets were missed, the scheduler sends only the most recently due reminder for that task; after the deadline it sends only the closest configured reminder once. A laptop that is shut down cannot run the scheduler.
+
+A normal MoodTask logout first clears the native snapshot and stops logout if that local cleanup cannot be saved. A confirmed signed-out state clears it as well. At startup, the last saved snapshot can run while authentication is restored; a subsequently confirmed different account replaces it. A temporary auth network failure keeps the last snapshot for that same installed desktop profile. Native scheduling does not depend on the WebView remaining open.
+
+Windows notification delivery depends on Windows notification settings for the installed MoodTask app. Enable notifications under **Settings → System → Notifications**. Tauri's official notification plugin documents that Windows notifications work for installed apps; in `tauri dev`, Windows can show the PowerShell development host name/icon instead. Build and install the NSIS package to verify final MoodTask branding and the actual toast behavior.
+
+Manual check: install the desktop build, sign in, create an active task with a reminder due in about one minute, allow Windows notifications for MoodTask, then hide the window with X and wait for the toast. Repeat with the window open, edit the deadline, complete/delete the task, sign out, and restart the app to verify schedule replacement, cancellation, cleanup, and persistence.

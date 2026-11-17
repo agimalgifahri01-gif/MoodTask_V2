@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import AppLayout from '../components/AppLayout'
 import AuthPage from '../pages/AuthPage'
@@ -17,6 +17,8 @@ import { useTasks } from '../features/tasks/TaskContext'
 import { ReminderSettingsProvider } from '../features/reminders/ReminderSettingsContext'
 import { SupabaseReminderRepository } from '../features/reminders/SupabaseReminderRepository'
 import { useSafeSignOut } from '../features/auth/useSafeSignOut'
+import { NativeReminderBridge } from '../features/reminders/nativeReminderBridge'
+import { prepareNativeReminderSession } from '../features/reminders/nativeReminder'
 
 export function AppRoutes() {
   const { loading, loadError, reload } = useTasks()
@@ -87,10 +89,14 @@ export function AppRoutes() {
   )
 }
 
-function Workspace() {
+function Workspace({ nativeSessionReady }: { nativeSessionReady: boolean }) {
   return (
     <TaskProvider repository={localStorageTaskRepository}>
       <ReminderSettingsProvider repository={null}>
+        <NativeReminderBridge
+          ownerUserId={null}
+          sessionReady={nativeSessionReady}
+        />
         <AppRoutes />
       </ReminderSettingsProvider>
     </TaskProvider>
@@ -100,9 +106,11 @@ function Workspace() {
 function AuthenticatedWorkspaceContent({
   userId,
   client,
+  nativeSessionReady,
 }: {
   userId: string
   client: SupabaseClient
+  nativeSessionReady: boolean
 }) {
   const safeSignOut = useSafeSignOut()
   const repository = useMemo(
@@ -133,6 +141,10 @@ function AuthenticatedWorkspaceContent({
                 : null
           }
         >
+          <NativeReminderBridge
+            ownerUserId={userId}
+            sessionReady={nativeSessionReady}
+          />
           <AppRoutes />
         </TaskProvider>
       )}
@@ -143,9 +155,11 @@ function AuthenticatedWorkspaceContent({
 function AuthenticatedWorkspace({
   userId,
   client,
+  nativeSessionReady,
 }: {
   userId: string
   client: SupabaseClient
+  nativeSessionReady: boolean
 }) {
   const reminderRepository = useMemo(
     () => new SupabaseReminderRepository(client, userId),
@@ -154,7 +168,11 @@ function AuthenticatedWorkspace({
 
   return (
     <ReminderSettingsProvider repository={reminderRepository}>
-      <AuthenticatedWorkspaceContent userId={userId} client={client} />
+      <AuthenticatedWorkspaceContent
+        userId={userId}
+        client={client}
+        nativeSessionReady={nativeSessionReady}
+      />
     </ReminderSettingsProvider>
   )
 }
@@ -162,6 +180,27 @@ function AuthenticatedWorkspace({
 export default function App() {
   const { status, user, authError, client } = useAuth()
   const location = useLocation()
+  const [nativeSession, setNativeSession] = useState<{
+    ownerUserId: string | null
+    ready: boolean
+  }>({ ownerUserId: null, ready: false })
+  useEffect(() => {
+    if (status === 'loading') return
+    if (status === 'unavailable') return
+    if (status === 'signed-in' && location.pathname === '/auth/recovery') return
+    const ownerUserId = status === 'signed-in' ? (user?.id ?? null) : null
+    let active = true
+    void prepareNativeReminderSession(ownerUserId)
+      .then(() => {
+        if (active) setNativeSession({ ownerUserId, ready: true })
+      })
+      .catch(() => {
+        console.warn('Native reminder session could not be prepared.')
+      })
+    return () => {
+      active = false
+    }
+  }, [location.pathname, status, user?.id])
 
   if (status === 'loading') {
     return (
@@ -182,7 +221,14 @@ export default function App() {
 
   if (status === 'signed-in' && user && client) {
     return (
-      <AuthenticatedWorkspace key={user.id} userId={user.id} client={client} />
+      <AuthenticatedWorkspace
+        key={user.id}
+        userId={user.id}
+        client={client}
+        nativeSessionReady={
+          nativeSession.ready && nativeSession.ownerUserId === user.id
+        }
+      />
     )
   }
 
@@ -194,7 +240,11 @@ export default function App() {
           <Link to="/auth">Coba masuk kembali</Link>
         </div>
       )}
-      <Workspace />
+      <Workspace
+        nativeSessionReady={
+          nativeSession.ready && nativeSession.ownerUserId === null
+        }
+      />
     </>
   )
 }

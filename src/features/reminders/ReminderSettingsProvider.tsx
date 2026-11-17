@@ -6,6 +6,8 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { isTauri } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import type { ReminderRepository } from './ReminderRepository'
 import {
   getCurrentBrowserPushSubscription,
@@ -15,16 +17,52 @@ import {
 } from './browserPush'
 import type { PushSubscriptionData, TaskReminder } from './model'
 import { validateReminderOffset } from './model'
+import { reminderTraceId } from './reminderTrace'
 import type { Task } from '../tasks/domain'
-import { ReminderSettingsContext } from './ReminderSettingsContext'
+import {
+  ReminderSettingsContext,
+  type NativeSoundDiagnostics,
+} from './ReminderSettingsContext'
 import { isCanonicalPushOrigin } from './pushOrigins'
+import { acknowledgeNativeReminderEvent } from './nativeReminder'
 import {
   DEFAULT_NOTIFICATION_SOUND,
   playNotificationSound,
   type NotificationSoundPreference,
+  type SoundPlayback,
 } from './notificationSound'
 
 const localSoundPreferenceKey = 'moodtask.notification-sound.v1'
+const emptyNativeSoundDiagnostics: NativeSoundDiagnostics = {
+  listenerActive: false,
+  eventReceived: false,
+  audioUrlStatus: 'unknown',
+  playbackStatus: 'unknown',
+  error: null,
+}
+
+function reminderLogFields(eventId: string) {
+  return { timestamp_epoch_ms: Date.now(), trace_id: reminderTraceId(eventId) }
+}
+
+function getNativeListenerErrorMessage(caught: unknown) {
+  const detail =
+    caught instanceof Error
+      ? caught.message
+      : typeof caught === 'string'
+        ? caught
+        : ''
+  if (/permission|not allowed|denied|capability/i.test(detail)) {
+    return 'Tauri menolak izin event. Capability jendela main harus mengizinkan core:event:allow-listen dan core:event:allow-unlisten.'
+  }
+  if (/plugin:event\|listen/i.test(detail)) {
+    return 'Tauri gagal menjalankan plugin:event|listen. Periksa izin core:event:allow-listen pada capability jendela main.'
+  }
+  const safeDetail = detail.replace(/[\r\n\t]/g, ' ').slice(0, 180)
+  return safeDetail
+    ? `Listener event Tauri gagal diaktifkan: ${safeDetail}`
+    : 'Listener event Tauri gagal diaktifkan karena alasan yang tidak diketahui.'
+}
 
 function readLocalSoundPreference(): NotificationSoundPreference {
   try {
@@ -68,12 +106,37 @@ export function ReminderSettingsProvider({
     useState<NotificationSoundPreference>(() =>
       repository ? DEFAULT_NOTIFICATION_SOUND : readLocalSoundPreference(),
     )
+  const soundPreferenceRef = useRef(soundPreference)
+  const muteRequestedRef = useRef(false)
   const [soundLoading, setSoundLoading] = useState(repository !== null)
   const [soundSaving, setSoundSaving] = useState(false)
   const [soundError, setSoundError] = useState<string | null>(null)
-  const currentPlayback = useRef<{ stop: () => void } | null>(null)
+  const [nativeSoundDiagnostics, setNativeSoundDiagnostics] =
+    useState<NativeSoundDiagnostics>(() =>
+      isTauri()
+        ? emptyNativeSoundDiagnostics
+        : {
+            ...emptyNativeSoundDiagnostics,
+            error:
+              'Listener event hanya tersedia di aplikasi MoodTask Desktop.',
+          },
+    )
+  const currentPlayback = useRef<SoundPlayback | null>(null)
+  const playbackRequestId = useRef(0)
   const playedEventIds = useRef(new Set<string>())
-
+  const pendingEventIds = useRef(new Set<string>())
+  const clearNativeSoundDiagnostics = useCallback(() => {
+    setNativeSoundDiagnostics((current) => ({
+      ...emptyNativeSoundDiagnostics,
+      listenerActive: current.listenerActive,
+    }))
+  }, [])
+  const cancelCurrentPlayback = useCallback(() => {
+    playbackRequestId.current += 1
+    const playback = currentPlayback.current
+    currentPlayback.current = null
+    playback?.stop()
+  }, [])
   const refresh = useCallback(async () => {
     if (!repository) {
       setReminders([])
@@ -105,12 +168,16 @@ export function ReminderSettingsProvider({
     setSoundError(null)
     if (!repository) {
       setReminders([])
-      setSoundPreference(readLocalSoundPreference())
+      const localPreference = readLocalSoundPreference()
+      setSoundPreference(localPreference)
     }
   }
 
   useEffect(() => {
     let active = true
+    if (!repository) {
+      soundPreferenceRef.current = readLocalSoundPreference()
+    }
     if (repository) {
       void repository
         .list()
@@ -135,7 +202,9 @@ export function ReminderSettingsProvider({
         .getNotificationSoundPreference()
         .then((preference) => {
           if (active) {
-            setSoundPreference(preference ?? DEFAULT_NOTIFICATION_SOUND)
+            const loadedPreference = preference ?? DEFAULT_NOTIFICATION_SOUND
+            soundPreferenceRef.current = loadedPreference
+            setSoundPreference(loadedPreference)
             setSoundError(null)
           }
         })
@@ -210,8 +279,8 @@ export function ReminderSettingsProvider({
         if (
           !repository ||
           !preference.objectPath ||
-          preference.objectPath !== soundPreference.objectPath ||
-          preference.fileName !== soundPreference.fileName
+          preference.objectPath !== soundPreferenceRef.current.objectPath ||
+          preference.fileName !== soundPreferenceRef.current.fileName
         ) {
           throw new Error('Unggah file suara sebelum memilih suara kustom.')
         }
@@ -221,9 +290,18 @@ export function ReminderSettingsProvider({
       ) {
         throw new Error('Pilih unggahan baru untuk menyimpan suara kustom.')
       }
+      if (preference.muted) {
+        muteRequestedRef.current = true
+        cancelCurrentPlayback()
+        setNativeSoundDiagnostics((current) => ({
+          ...current,
+          playbackStatus: 'stopped',
+          error: 'Suara notifikasi sedang dimatikan.',
+        }))
+      }
       setSoundSaving(true)
       setSoundError(null)
-      const previous = soundPreference
+      const previous = soundPreferenceRef.current
       try {
         if (repository) {
           await repository.saveNotificationSoundPreference(preference)
@@ -233,6 +311,8 @@ export function ReminderSettingsProvider({
             JSON.stringify(preference),
           )
         }
+        soundPreferenceRef.current = preference
+        muteRequestedRef.current = false
         setSoundPreference(preference)
         if (
           previous.soundId === 'custom' &&
@@ -249,6 +329,8 @@ export function ReminderSettingsProvider({
           }
         }
       } catch (caught) {
+        soundPreferenceRef.current = previous
+        muteRequestedRef.current = false
         const message =
           caught instanceof Error
             ? caught.message
@@ -260,7 +342,7 @@ export function ReminderSettingsProvider({
         setSoundSaving(false)
       }
     },
-    [repository, soundPreference],
+    [cancelCurrentPlayback, repository],
   )
 
   const uploadAndSaveNotificationSound = useCallback(
@@ -274,9 +356,18 @@ export function ReminderSettingsProvider({
       if (!repository) {
         throw new Error('Unggahan suara memerlukan akun MoodTask.')
       }
+      if (muted) {
+        muteRequestedRef.current = true
+        cancelCurrentPlayback()
+        setNativeSoundDiagnostics((current) => ({
+          ...current,
+          playbackStatus: 'stopped',
+          error: 'Suara notifikasi sedang dimatikan.',
+        }))
+      }
       setSoundSaving(true)
       setSoundError(null)
-      const previous = soundPreference
+      const previous = soundPreferenceRef.current
       let uploadedPath: string | null = null
       let preferenceSaved = false
       let cleanupFailed = false
@@ -295,6 +386,8 @@ export function ReminderSettingsProvider({
         }
         await repository.saveNotificationSoundPreference(nextPreference)
         preferenceSaved = true
+        soundPreferenceRef.current = nextPreference
+        muteRequestedRef.current = false
         setSoundPreference(nextPreference)
         if (previous.soundId === 'custom' && previous.objectPath) {
           try {
@@ -307,6 +400,8 @@ export function ReminderSettingsProvider({
         }
         return nextPreference
       } catch (caught) {
+        soundPreferenceRef.current = previous
+        muteRequestedRef.current = false
         if (uploadedPath && !preferenceSaved) {
           await repository.removeNotificationSound(uploadedPath).catch(() => {
             cleanupFailed = true
@@ -325,37 +420,341 @@ export function ReminderSettingsProvider({
         setSoundSaving(false)
       }
     },
-    [repository, soundPreference],
+    [cancelCurrentPlayback, repository],
   )
 
   const playConfiguredNotificationSound = useCallback(
     async (eventId: string) => {
-      if (soundLoading || !eventId || playedEventIds.current.has(eventId))
+      if (!eventId) {
+        console.warn(
+          '[MoodTask] Reminder sound ignored: event ID is missing.',
+          { timestamp_epoch_ms: Date.now() },
+        )
         return
+      }
+      const trace = reminderLogFields(eventId)
+      console.info('[MoodTask] Reminder playback handler invoked.', trace)
+      if (playedEventIds.current.has(eventId)) {
+        console.info(
+          '[MoodTask] Reminder event rejected by deduplication.',
+          trace,
+        )
+        return
+      }
+
+      if (soundLoading) {
+        pendingEventIds.current.add(eventId)
+        console.info(
+          '[MoodTask] Reminder event queued until preferences load.',
+          trace,
+        )
+        return
+      }
+      const preference = soundPreferenceRef.current
+      if (preference.muted || muteRequestedRef.current) {
+        cancelCurrentPlayback()
+        setNativeSoundDiagnostics((current) => ({
+          ...current,
+          playbackStatus: 'stopped',
+          error: 'Suara notifikasi sedang dimatikan.',
+        }))
+        console.info(
+          '[MoodTask] Reminder sound skipped because sound is muted.',
+          trace,
+        )
+        return
+      }
       playedEventIds.current.add(eventId)
+      console.info(
+        '[MoodTask] Reminder event accepted by deduplication.',
+        trace,
+      )
       if (playedEventIds.current.size > 100) {
         const oldest = playedEventIds.current.values().next().value
         if (oldest) playedEventIds.current.delete(oldest)
       }
-      if (soundPreference.muted) return
+      const requestId = playbackRequestId.current + 1
+      playbackRequestId.current = requestId
+      const previousPlayback = currentPlayback.current
+      currentPlayback.current = null
+      previousPlayback?.stop()
+      let playbackStage = 'load-custom-sound-url'
       try {
-        currentPlayback.current?.stop()
-        const url =
-          soundPreference.soundId === 'custom' && soundPreference.objectPath
-            ? await getNotificationSoundUrl(soundPreference.objectPath)
-            : null
-        currentPlayback.current = await playNotificationSound(
-          soundPreference.soundId,
+        let url: string | null = null
+        if (preference.soundId === 'custom') {
+          if (!preference.objectPath) {
+            setNativeSoundDiagnostics((current) => ({
+              ...current,
+              audioUrlStatus: 'failure',
+              error: 'File MP3 pilihan tidak ditemukan pada preferensi suara.',
+            }))
+            throw new Error('Custom sound path is missing.')
+          }
+          try {
+            url = await getNotificationSoundUrl(preference.objectPath)
+          } catch {
+            setNativeSoundDiagnostics((current) => ({
+              ...current,
+              audioUrlStatus: 'failure',
+              error: 'File MP3 gagal dimuat. Periksa koneksi dan file suara.',
+            }))
+            throw new Error('Custom sound URL could not be loaded.')
+          }
+        } else {
+          setNativeSoundDiagnostics((current) => ({
+            ...current,
+            audioUrlStatus: 'unknown',
+            error: null,
+          }))
+        }
+        if (requestId !== playbackRequestId.current) return
+        playbackStage = 'audio-play'
+        console.info('[MoodTask] Reminder sound playback requested.', {
+          ...trace,
+          soundId: preference.soundId,
+        })
+        const playback = playNotificationSound(
+          preference.soundId,
           url,
+          preference.soundId === 'custom'
+            ? {
+                onCustomSourceLoaded: () =>
+                  setNativeSoundDiagnostics((current) => ({
+                    ...current,
+                    audioUrlStatus: 'success',
+                  })),
+                onCustomSourceError: () =>
+                  setNativeSoundDiagnostics((current) => ({
+                    ...current,
+                    audioUrlStatus: 'failure',
+                    error:
+                      'MP3 dari penyimpanan gagal dimuat oleh pemutar audio.',
+                  })),
+              }
+            : undefined,
         )
-      } catch {
+        if (requestId !== playbackRequestId.current) {
+          playback.stop()
+          return
+        }
+        currentPlayback.current = playback
+        setNativeSoundDiagnostics((current) => ({
+          ...current,
+          playbackStatus: 'starting',
+          error: null,
+        }))
+        playback.onStatus((status, error) => {
+          if (currentPlayback.current !== playback) return
+          if (
+            status === 'ended' ||
+            status === 'stopped' ||
+            status === 'error'
+          ) {
+            currentPlayback.current = null
+          }
+          if (status === 'error') {
+            playedEventIds.current.delete(eventId)
+            const errorName = error?.name || 'MediaError'
+            console.warn('[MoodTask] Reminder sound media error.', {
+              ...trace,
+              stage: playbackStage,
+              errorName,
+            })
+            const message =
+              errorName === 'NotAllowedError'
+                ? 'WebView memblokir pemutaran otomatis. Tekan “Dengarkan” untuk mengaktifkan audio.'
+                : `Pemutaran gagal (${errorName}). Periksa file suara dan output audio Windows.`
+            setNativeSoundDiagnostics((current) => ({
+              ...current,
+              playbackStatus: 'failure',
+              error: message,
+            }))
+            setSoundError(message)
+            return
+          }
+          setNativeSoundDiagnostics((current) => ({
+            ...current,
+            playbackStatus:
+              status === 'started'
+                ? 'started'
+                : status === 'ended'
+                  ? 'ended'
+                  : 'stopped',
+            error: null,
+          }))
+          if (status === 'started') {
+            console.info('[MoodTask] Reminder sound playback started.', {
+              ...trace,
+              soundId: preference.soundId,
+            })
+          }
+        })
+      } catch (caught) {
+        const errorName =
+          caught instanceof Error && caught.name ? caught.name : 'UnknownError'
+        console.warn('[MoodTask] Reminder sound playback failed.', {
+          ...trace,
+          stage: playbackStage,
+          errorName,
+        })
+        if (requestId === playbackRequestId.current) {
+          playedEventIds.current.delete(eventId)
+        }
+        setNativeSoundDiagnostics((current) => ({
+          ...current,
+          playbackStatus: 'failure',
+          error:
+            errorName === 'NotAllowedError'
+              ? 'WebView memblokir pemutaran otomatis. Tekan “Dengarkan” untuk mengaktifkan audio.'
+              : playbackStage === 'load-custom-sound-url'
+                ? 'File MP3 gagal dimuat. Periksa koneksi dan preferensi suara.'
+                : `Pemutaran gagal (${errorName}). Periksa file, mute, dan output audio Windows.`,
+        }))
         setSoundError(
-          'Browser tidak dapat memutar suara notifikasi otomatis. Gunakan “Dengarkan” untuk mengizinkan audio, atau periksa format dan pengaturan browser.',
+          errorName === 'NotAllowedError'
+            ? 'WebView memblokir pemutaran otomatis. Buka pengaturan suara dan tekan “Dengarkan” untuk mengaktifkan audio.'
+            : `Suara pengingat gagal diputar (${playbackStage}, ${errorName}). Periksa koneksi dan format file suara.`,
         )
       }
     },
-    [getNotificationSoundUrl, soundLoading, soundPreference],
+    [cancelCurrentPlayback, getNotificationSoundUrl, soundLoading],
   )
+  useEffect(() => {
+    if (soundLoading || pendingEventIds.current.size === 0) return
+
+    const pendingIds = [...pendingEventIds.current]
+    pendingEventIds.current.clear()
+
+    for (const eventId of pendingIds) {
+      void playConfiguredNotificationSound(eventId)
+    }
+  }, [soundLoading, playConfiguredNotificationSound])
+
+  const playConfiguredNotificationSoundRef = useRef(
+    playConfiguredNotificationSound,
+  )
+  useEffect(() => {
+    playConfiguredNotificationSoundRef.current = playConfiguredNotificationSound
+  }, [playConfiguredNotificationSound])
+
+  useEffect(() => {
+    if (!isTauri()) return
+    let unlisten: (() => void) | undefined
+    let disposed = false
+    console.info('[MoodTask] Native reminder listener registration started.', {
+      timestamp_epoch_ms: Date.now(),
+    })
+    void listen<{ eventId: string }>(
+      'moodtask://native-reminder-received',
+      ({ payload }) => {
+        if (disposed) return
+        const hasEventId = typeof payload?.eventId === 'string'
+        const trace = hasEventId
+          ? reminderLogFields(payload.eventId as string)
+          : { timestamp_epoch_ms: Date.now(), trace_id: null }
+        console.info('[MoodTask] Native reminder listener callback received.', {
+          ...trace,
+          payload_has_event_id: hasEventId,
+        })
+        if (hasEventId) {
+          const eventId = payload.eventId as string
+          setNativeSoundDiagnostics((current) => ({
+            ...current,
+            eventReceived: true,
+            audioUrlStatus: 'unknown',
+            playbackStatus: 'unknown',
+            error: null,
+          }))
+          console.info(
+            '[MoodTask] Native reminder event accepted by React.',
+            trace,
+          )
+          console.info(
+            '[MoodTask] Native reminder acknowledgement started.',
+            trace,
+          )
+          void acknowledgeNativeReminderEvent(eventId)
+            .then(() => {
+              console.info(
+                '[MoodTask] Native reminder acknowledgement saved.',
+                trace,
+              )
+            })
+            .catch((caught: unknown) => {
+              console.error(
+                '[MoodTask] Native reminder acknowledgement failed; Rust will retry delivery.',
+                {
+                  ...trace,
+                  errorName:
+                    caught instanceof Error && caught.name
+                      ? caught.name
+                      : 'UnknownError',
+                },
+              )
+            })
+          void playConfiguredNotificationSoundRef
+            .current(eventId)
+            .catch((caught: unknown) => {
+              console.error('[MoodTask] Reminder playback handler rejected.', {
+                ...trace,
+                errorName:
+                  caught instanceof Error && caught.name
+                    ? caught.name
+                    : 'UnknownError',
+              })
+            })
+        } else {
+          console.warn(
+            '[MoodTask] Native reminder event had an invalid payload.',
+            {
+              ...trace,
+            },
+          )
+        }
+      },
+    )
+      .then((stopListening) => {
+        if (disposed) {
+          stopListening()
+          return
+        }
+        console.info('[MoodTask] Native reminder listener registered.', {
+          timestamp_epoch_ms: Date.now(),
+        })
+        setNativeSoundDiagnostics((current) => ({
+          ...current,
+          listenerActive: true,
+        }))
+        unlisten = stopListening
+      })
+      .catch((caught: unknown) => {
+        const errorName =
+          caught instanceof Error && caught.name ? caught.name : 'UnknownError'
+        const errorMessage = getNativeListenerErrorMessage(caught)
+        console.error(
+          '[MoodTask] Native reminder listener registration failed.',
+          {
+            timestamp_epoch_ms: Date.now(),
+            errorName,
+            reason: errorMessage,
+          },
+        )
+        if (disposed) return
+        setNativeSoundDiagnostics((current) => ({
+          ...current,
+          listenerActive: false,
+          error: errorMessage,
+        }))
+        setSoundError(errorMessage)
+      })
+    return () => {
+      disposed = true
+      console.info('[MoodTask] Native reminder listener disposed.', {
+        timestamp_epoch_ms: Date.now(),
+      })
+      unlisten?.()
+    }
+  }, [])
 
   useEffect(() => {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
@@ -375,12 +774,15 @@ export function ReminderSettingsProvider({
       }
     }
     serviceWorker.addEventListener('message', onMessage)
-    return () => {
-      serviceWorker.removeEventListener('message', onMessage)
-      currentPlayback.current?.stop()
-      currentPlayback.current = null
-    }
+    return () => serviceWorker.removeEventListener('message', onMessage)
   }, [playConfiguredNotificationSound])
+
+  useEffect(
+    () => () => {
+      cancelCurrentPlayback()
+    },
+    [cancelCurrentPlayback],
+  )
 
   const saveReminder = useCallback(
     async (task: Task, minutesBefore: number, enabled = true) => {
@@ -528,6 +930,8 @@ export function ReminderSettingsProvider({
       soundLoading,
       soundSaving,
       soundError,
+      nativeSoundDiagnostics,
+      clearNativeSoundDiagnostics,
       refresh,
       saveReminder,
       removeReminder,
@@ -553,6 +957,8 @@ export function ReminderSettingsProvider({
       soundLoading,
       soundSaving,
       soundError,
+      nativeSoundDiagnostics,
+      clearNativeSoundDiagnostics,
       refresh,
       saveReminder,
       removeReminder,

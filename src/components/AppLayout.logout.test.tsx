@@ -40,6 +40,14 @@ describe('AppLayout logout', () => {
     expect(safeSignOut).toHaveBeenCalledOnce()
   })
 
+  it('keeps the reminder navigation without the temporary badge', () => {
+    renderLayout()
+
+    const remindersLink = screen.getByRole('link', { name: 'Pengingat' })
+    expect(remindersLink.textContent).toBe('Pengingat')
+    expect(screen.queryByText('nanti')).toBeNull()
+  })
+
   it('shows cleanup failure and does not claim logout succeeded', async () => {
     safeSignOut.mockRejectedValueOnce(new Error('Koneksi cleanup gagal.'))
     renderLayout()

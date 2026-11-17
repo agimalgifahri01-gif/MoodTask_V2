@@ -4,6 +4,23 @@ import type { TaskReminder } from './model'
 import type { Task } from '../tasks/domain'
 import type { NotificationSoundPreference } from './notificationSound'
 
+export type NativeSoundDiagnosticStatus = 'unknown' | 'success' | 'failure'
+export type NativePlaybackDiagnosticStatus =
+  | 'unknown'
+  | 'starting'
+  | 'started'
+  | 'ended'
+  | 'stopped'
+  | 'failure'
+
+export type NativeSoundDiagnostics = {
+  listenerActive: boolean
+  eventReceived: boolean
+  audioUrlStatus: NativeSoundDiagnosticStatus
+  playbackStatus: NativePlaybackDiagnosticStatus
+  error: string | null
+}
+
 export type ReminderSettingsValue = {
   repositoryAvailable: boolean
   reminders: TaskReminder[]
@@ -16,6 +33,8 @@ export type ReminderSettingsValue = {
   soundLoading: boolean
   soundSaving: boolean
   soundError: string | null
+  nativeSoundDiagnostics: NativeSoundDiagnostics
+  clearNativeSoundDiagnostics: () => void
   refresh: () => Promise<void>
   saveReminder: (
     task: Task,
